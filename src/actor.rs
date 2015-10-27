@@ -17,15 +17,18 @@ pub struct Actor<T> where T: Any + Send {
     pub sender: Sender<Message<T>>,
     pub receiver: Receiver<Message<T>>,
     pub handle: thread::JoinHandle<ActorResult<(), T>>,
+    pub name: Option<String>,
 }
 
 impl<T> Actor<T> where T: Any + Send {
     /// Create a new actor handler struct.
-    pub fn new(sender: Sender<Message<T>>, receiver: Receiver<Message<T>>, handle: thread::JoinHandle<ActorResult<(), T>>) -> Self {
+    pub fn new(sender: Sender<Message<T>>, receiver: Receiver<Message<T>>,
+        handle: thread::JoinHandle<ActorResult<(), T>>, name: Option<String>) -> Self {
         Actor {
             sender: sender,
             receiver: receiver,
             handle: handle,
+            name: name,
         }
     }
 
@@ -77,8 +80,9 @@ impl<A: GenServer> Builder<A> {
             Err(err) => return Err(err),
         };
 
-        let thread_name = self.name.clone().unwrap_or(String::from("GenServer"));
-        let handle = thread::Builder::new().name(thread_name).spawn(move || {
+        let name = self.name.clone();
+        let thread_name = name.clone().unwrap_or("GenServer".to_string());
+        let handle = thread::Builder::new().name(thread_name.clone()).spawn(move || {
             let mut timeout: Option<SteadyTime> = None;
             if let Some(ms) = initial_wait_ms {
                 set_timeout(ms, &mut timeout);
@@ -87,7 +91,7 @@ impl<A: GenServer> Builder<A> {
                 if let Some(go_time) = timeout {
                     if go_time >= SteadyTime::now() {
                         match self.spec.handle_timeout(&mut state) {
-                            HandleResult::Stop(reason, None) => try!(shutdown(reason, None, &otx)),
+                            HandleResult::Stop(reason, None) => return shutdown(reason, None, &otx),
                             HandleResult::NoReply(Some(0)) => {
                                 set_timeout(0, &mut timeout);
                                 continue;
@@ -115,12 +119,12 @@ impl<A: GenServer> Builder<A> {
                                     set_timeout(ms, &mut timeout);
                                 }
                             },
-                            HandleResult::Stop(reason, reply) => try!(shutdown(reason, reply, &otx)),
+                            HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                         }
                     },
                     Ok(Message::Cast(msg)) => {
                         match self.spec.handle_cast(msg, &mut state) {
-                            HandleResult::Stop(reason, reply) => try!(shutdown(reason, reply, &otx)),
+                            HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
                                     set_timeout(ms, &mut timeout);
@@ -131,7 +135,7 @@ impl<A: GenServer> Builder<A> {
                     },
                     Ok(Message::Info(msg)) => {
                         match self.spec.handle_info(msg, &mut state) {
-                            HandleResult::Stop(reason, reply) => try!(shutdown(reason, reply, &otx)),
+                            HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
                                     set_timeout(ms, &mut timeout);
@@ -147,7 +151,7 @@ impl<A: GenServer> Builder<A> {
             }
             Ok(())
         }).unwrap();
-        Ok(Actor::new(itx, orx, handle))
+        Ok(Actor::new(itx, orx, handle, name))
     }
 }
 
@@ -260,13 +264,16 @@ mod tests {
 
     #[derive(Debug)]
     enum MyError {
-        One,
+        DirtyState,
     }
 
     #[derive(Debug)]
     enum MyMessage {
-        InitState(bool),
-        IsInitialized,
+        Ok,
+        Stop,
+        State(bool),
+        GetState,
+        SetState(bool),
     }
 
     impl GenServer for Worker {
@@ -275,19 +282,41 @@ mod tests {
         type E = MyError;
 
         fn init(&self, state: &mut MyState) -> InitResult<MyError> {
-            state.initialized = true;
-            Ok(None)
+            if state.initialized {
+                Err(MyError::DirtyState)
+            } else {
+                state.initialized = true;
+                Ok(None)
+            }
         }
 
         fn handle_call(&self, msg: MyMessage, _sender: &Sender<Message<MyMessage>>, state: &mut MyState) -> HandleResult<MyMessage> {
-            HandleResult::Reply(MyMessage::InitState(state.initialized), None)
+            match msg {
+                MyMessage::Stop => HandleResult::Stop(StopReason::Normal, Some(MyMessage::Ok)),
+                MyMessage::GetState => HandleResult::Reply(MyMessage::State(state.initialized), None),
+                MyMessage::SetState(value) => {
+                    state.initialized = value;
+                    HandleResult::Reply(MyMessage::Ok, None)
+                }
+                _ => HandleResult::Stop(StopReason::Other(String::from("Nope")), None),
+            }
+        }
+
+        fn handle_cast(&self, msg: MyMessage, state: &mut MyState) -> HandleResult<MyMessage> {
+            match msg {
+                MyMessage::SetState(value) => {
+                    state.initialized = value;
+                    HandleResult::NoReply(None)
+                },
+                _ => HandleResult::NoReply(None)
+            }
         }
     }
 
     impl fmt::Display for MyError {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             match *self {
-                MyError::One => write!(f, "test error"),
+                MyError::DirtyState => write!(f, "state already initialized"),
             }
         }
     }
@@ -295,18 +324,75 @@ mod tests {
     impl Error for MyError {
         fn description(&self) -> &str {
             match *self {
-                MyError::One => "test error"
+                MyError::DirtyState => "state already initialized"
             }
         }
     }
 
     #[test]
-    fn call() {
-        let state = MyState::new();
-        let actor = Builder::new(Worker).name(String::from("Whatever")).start(state).unwrap();
-        match actor.call(MyMessage::IsInitialized).unwrap() {
-            MyMessage::InitState(result) => assert_eq!(result, true),
-            _ => assert_eq!(false, true),
+    fn error_on_init() {
+        let mut state = MyState::new();
+        state.initialized = true;
+        match Builder::new(Worker).start(state) {
+            Err(MyError::DirtyState) => assert!(true),
+            Ok(_) => assert!(false),
         }
+    }
+
+    #[test]
+    fn call_set_get_state() {
+        let state = MyState::new();
+        let actor = Builder::new(Worker).start(state).unwrap();
+        match actor.call(MyMessage::GetState) {
+            Ok(MyMessage::State(true)) => assert!(true),
+            _ => assert!(false),
+        }
+        assert!(actor.call(MyMessage::SetState(false)).is_ok());
+        match actor.call(MyMessage::GetState) {
+            Ok(MyMessage::State(false)) => assert!(true),
+            _ => assert!(false),
+        }
+    }
+
+    #[test]
+    fn multiple_cast_and_call_ordered() {
+        let state = MyState::new();
+        let actor = Builder::new(Worker).start(state).unwrap();
+        assert!(actor.cast(MyMessage::SetState(false)).is_ok());
+        assert!(actor.cast(MyMessage::SetState(true)).is_ok());
+        assert!(actor.cast(MyMessage::SetState(false)).is_ok());
+        match actor.call(MyMessage::GetState) {
+            Ok(MyMessage::State(result)) => assert_eq!(result, false),
+            _ => assert!(false),
+        }
+    }
+
+    #[test]
+    fn stopping_an_actor() {
+        let state = MyState::new();
+        let actor = Builder::new(Worker).start(state).unwrap();
+        match actor.call(MyMessage::Stop) {
+            Ok(MyMessage::Ok) => assert!(true),
+            _ => assert!(false),
+        }
+        match actor.handle.join() {
+            Ok(_) => assert!(true),
+            Err(_) => assert!(false),
+        }
+    }
+
+    #[test]
+    fn explicitly_naming_actor() {
+        let state = MyState::new();
+        let actor = Builder::new(Worker).name("batman".to_string()).start(state).unwrap();
+        assert!(actor.name.is_some());
+        assert_eq!(actor.name.unwrap(), "batman".to_string());
+    }
+
+    #[test]
+    fn default_named_actor() {
+        let state = MyState::new();
+        let actor = Builder::new(Worker).start(state).unwrap();
+        assert!(actor.name.is_none());
     }
 }
