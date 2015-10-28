@@ -10,20 +10,20 @@ use std::thread;
 use time::{Duration, SteadyTime};
 
 pub type InitResult<E> = result::Result<Option<u64>, E>;
-pub type ActorResult<T, X> = result::Result<T, ActorError<X>>;
+pub type ActorResult<T> = result::Result<T, ActorError>;
 pub type StartResult<T, E> = result::Result<Actor<T>, E>;
 
 pub struct Actor<T> where T: Any + Send {
     pub sender: Sender<Message<T>>,
     pub receiver: Receiver<Message<T>>,
-    pub handle: thread::JoinHandle<ActorResult<(), T>>,
+    pub handle: thread::JoinHandle<ActorResult<()>>,
     pub name: Option<String>,
 }
 
 impl<T> Actor<T> where T: Any + Send {
     /// Create a new actor handler struct.
     pub fn new(sender: Sender<Message<T>>, receiver: Receiver<Message<T>>,
-        handle: thread::JoinHandle<ActorResult<(), T>>, name: Option<String>) -> Self {
+        handle: thread::JoinHandle<ActorResult<()>>, name: Option<String>) -> Self {
         Actor {
             sender: sender,
             receiver: receiver,
@@ -32,24 +32,32 @@ impl<T> Actor<T> where T: Any + Send {
         }
     }
 
-    pub fn cast(&self, message: T) -> Result<(), ActorError<T>> {
-        match self.sender.send(Message::Cast(message)) {
-            Ok(()) => Ok(()),
-            Err(err) => Err(ActorError::from(err)),
-        }
+    pub fn cast(&self, message: T) -> Result<(), ActorError> {
+        self::cast(&self.sender, message)
     }
 
-    pub fn call(&self, message: T) -> Result<T, ActorError<T>> {
-        match self.sender.send(Message::Call(message)) {
-            Ok(()) => {
-                match self.receiver.recv() {
-                    Ok(Message::Reply(msg)) => Ok(msg),
-                    Ok(_) => panic!("must reply from a call!"),
-                    Err(err) => Err(ActorError::from(err)),
-                }
-            },
-            Err(err) => Err(ActorError::from(err)),
-        }
+    pub fn call(&self, message: T) -> Result<T, ActorError> {
+        self::call(&self.sender, &self.receiver, message)
+    }
+}
+
+pub fn cast<T: Any + Send>(tx: &Sender<Message<T>>, message: T) -> Result<(), ActorError> {
+    match tx.send(Message::Cast(message)) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(ActorError::from(err)),
+    }
+}
+
+pub fn call<T: Any + Send>(tx: &Sender<Message<T>>, rx: &Receiver<Message<T>>, message: T) -> Result<T, ActorError> {
+    match tx.send(Message::Call(message)) {
+        Ok(()) => {
+            match rx.recv() {
+                Ok(Message::Reply(msg)) => Ok(msg),
+                Ok(_) => panic!("must reply from a call!"),
+                Err(err) => Err(ActorError::from(err)),
+            }
+        },
+        Err(err) => Err(ActorError::from(err)),
     }
 }
 
@@ -75,11 +83,11 @@ impl<A: GenServer> Builder<A> {
     pub fn start(self, mut state: A::S) -> StartResult<A::T, A::E> {
         let (otx, orx) = mpsc::channel::<Message<A::T>>();
         let (itx, irx) = mpsc::channel::<Message<A::T>>();
-        let initial_wait_ms = match self.spec.init(&mut state) {
+        let initial_wait_ms = match self.spec.init(&itx, &mut state) {
             Ok(result) => result,
             Err(err) => return Err(err),
         };
-
+        let itx2 = itx.clone(); // clone 'self' sender for actor struct
         let name = self.name.clone();
         let thread_name = name.clone().unwrap_or("GenServer".to_string());
         let handle = thread::Builder::new().name(thread_name.clone()).spawn(move || {
@@ -90,7 +98,7 @@ impl<A: GenServer> Builder<A> {
             loop {
                 if let Some(go_time) = timeout {
                     if go_time >= SteadyTime::now() {
-                        match self.spec.handle_timeout(&mut state) {
+                        match self.spec.handle_timeout(&itx, &mut state) {
                             HandleResult::Stop(reason, None) => return shutdown(reason, None, &otx),
                             HandleResult::NoReply(Some(0)) => {
                                 set_timeout(0, &mut timeout);
@@ -107,7 +115,7 @@ impl<A: GenServer> Builder<A> {
                 }
                 match irx.try_recv() {
                     Ok(Message::Call(msg)) => {
-                        match self.spec.handle_call(msg, &otx, &mut state) {
+                        match self.spec.handle_call(msg, &itx, &otx, &mut state) {
                             HandleResult::Reply(msg, new_timeout) => {
                                 try!(otx.send(Message::Reply(msg)));
                                 if let Some(ms) = new_timeout {
@@ -123,7 +131,7 @@ impl<A: GenServer> Builder<A> {
                         }
                     },
                     Ok(Message::Cast(msg)) => {
-                        match self.spec.handle_cast(msg, &mut state) {
+                        match self.spec.handle_cast(msg, &itx, &mut state) {
                             HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
@@ -134,7 +142,7 @@ impl<A: GenServer> Builder<A> {
                         }
                     },
                     Ok(Message::Info(msg)) => {
-                        match self.spec.handle_info(msg, &mut state) {
+                        match self.spec.handle_info(msg, &itx, &mut state) {
                             HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
@@ -151,25 +159,25 @@ impl<A: GenServer> Builder<A> {
             }
             Ok(())
         }).unwrap();
-        Ok(Actor::new(itx, orx, handle, name))
+        Ok(Actor::new(itx2, orx, handle, name))
     }
 }
 
 #[derive(Debug)]
-pub enum ActorError<T> where T: Any + Send {
+pub enum ActorError {
     InitFailure(String),
     AbnormalShutdown(String),
-    SendError(mpsc::SendError<Message<T>>),
+    SendError,
     RecvError,
 }
 
-impl<T: Any + Send> From<mpsc::SendError<Message<T>>> for ActorError<T> {
-    fn from(err: mpsc::SendError<Message<T>>) -> Self {
-        ActorError::SendError(err)
+impl<T: Any + Send> From<mpsc::SendError<Message<T>>> for ActorError {
+    fn from(_err: mpsc::SendError<Message<T>>) -> Self {
+        ActorError::SendError
     }
 }
 
-impl<T: Any + Send> From<mpsc::RecvError> for ActorError<T> {
+impl From<mpsc::RecvError> for ActorError {
     fn from(_err: mpsc::RecvError) -> Self {
         ActorError::RecvError
     }
@@ -178,7 +186,7 @@ impl<T: Any + Send> From<mpsc::RecvError> for ActorError<T> {
 #[derive(Debug)]
 pub enum StopReason {
     Normal,
-    Other(String),
+    Fatal(String),
 }
 
 #[derive(Debug)]
@@ -211,18 +219,18 @@ pub trait GenServer : Send + 'static {
     type S: Send + Any;
     type E: Error + 'static;
 
-    fn init(&self, state: &mut Self::S) -> InitResult<Self::E>;
+    fn init(&self, _tx: &Sender<Message<Self::T>>, state: &mut Self::S) -> InitResult<Self::E>;
 
-    fn handle_call(&self, _message: Self::T, _sender: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_call(&self, _message: Self::T, _tx: &Sender<Message<Self::T>>, _caller: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
         panic!("handle_call callback not implemented");
     }
-    fn handle_cast(&self, _message: Self::T, _state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_cast(&self, _message: Self::T, _tx: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
         panic!("handle_cast callback not implemented");
     }
-    fn handle_info(&self, _message: Self::T, _state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_info(&self, _message: Self::T, _tx: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
         HandleResult::NoReply(None)
     }
-    fn handle_timeout(&self, _state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_timeout(&self, _tx: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
         HandleResult::NoReply(None)
     }
 }
@@ -231,13 +239,13 @@ fn set_timeout(wait_ms: u64, current_timeout: &mut Option<SteadyTime>) {
     *current_timeout = Some(SteadyTime::now() + Duration::milliseconds(wait_ms as i64));
 }
 
-fn shutdown<T: Any + Send>(reason: StopReason, reply: Option<T>, sender: &Sender<Message<T>>) -> Result<(), ActorError<T>> {
+fn shutdown<T: Any + Send>(reason: StopReason, reply: Option<T>, sender: &Sender<Message<T>>) -> Result<(), ActorError> {
     if let Some(msg) = reply {
         let _result = sender.send(Message::Reply(msg));
     }
     match reason {
         StopReason::Normal => Ok(()),
-        StopReason::Other(e) => Err(ActorError::AbnormalShutdown(e)),
+        StopReason::Fatal(e) => Err(ActorError::AbnormalShutdown(e)),
     }
 }
 
@@ -281,7 +289,7 @@ mod tests {
         type S = MyState;
         type E = MyError;
 
-        fn init(&self, state: &mut MyState) -> InitResult<MyError> {
+        fn init(&self, _tx: &Sender<Message<Self::T>>, state: &mut Self::S) -> InitResult<Self::E> {
             if state.initialized {
                 Err(MyError::DirtyState)
             } else {
@@ -290,7 +298,7 @@ mod tests {
             }
         }
 
-        fn handle_call(&self, msg: MyMessage, _sender: &Sender<Message<MyMessage>>, state: &mut MyState) -> HandleResult<MyMessage> {
+        fn handle_call(&self, msg: Self::T, _: &Sender<Message<Self::T>>, _: &Sender<Message<Self::T>>, state: &mut Self::S) -> HandleResult<Self::T> {
             match msg {
                 MyMessage::Stop => HandleResult::Stop(StopReason::Normal, Some(MyMessage::Ok)),
                 MyMessage::GetState => HandleResult::Reply(MyMessage::State(state.initialized), None),
@@ -298,11 +306,11 @@ mod tests {
                     state.initialized = value;
                     HandleResult::Reply(MyMessage::Ok, None)
                 }
-                _ => HandleResult::Stop(StopReason::Other(String::from("Nope")), None),
+                _ => HandleResult::Stop(StopReason::Fatal(String::from("Nope")), None),
             }
         }
 
-        fn handle_cast(&self, msg: MyMessage, state: &mut MyState) -> HandleResult<MyMessage> {
+        fn handle_cast(&self, msg: Self::T, _: &Sender<Message<Self::T>>, state: &mut Self::S) -> HandleResult<Self::T> {
             match msg {
                 MyMessage::SetState(value) => {
                     state.initialized = value;
