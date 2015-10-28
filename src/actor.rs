@@ -87,7 +87,7 @@ impl<A: GenServer> Builder<A> {
             Ok(result) => result,
             Err(err) => return Err(err),
         };
-        let itx2 = itx.clone(); // clone 'self' sender for actor struct
+        let itx2 = itx.clone(); // clone inner receive loop's sender for actor struct
         let name = self.name.clone();
         let thread_name = name.clone().unwrap_or("GenServer".to_string());
         let handle = thread::Builder::new().name(thread_name.clone()).spawn(move || {
@@ -98,7 +98,7 @@ impl<A: GenServer> Builder<A> {
             loop {
                 if let Some(go_time) = timeout {
                     if go_time >= SteadyTime::now() {
-                        match self.spec.handle_timeout(&itx, &mut state) {
+                        match self.spec.handle_timeout(&otx, &mut state) {
                             HandleResult::Stop(reason, None) => return shutdown(reason, None, &otx),
                             HandleResult::NoReply(Some(0)) => {
                                 set_timeout(0, &mut timeout);
@@ -115,7 +115,7 @@ impl<A: GenServer> Builder<A> {
                 }
                 match irx.try_recv() {
                     Ok(Message::Call(msg)) => {
-                        match self.spec.handle_call(msg, &itx, &otx, &mut state) {
+                        match self.spec.handle_call(msg, &otx, &itx, &mut state) {
                             HandleResult::Reply(msg, new_timeout) => {
                                 try!(otx.send(Message::Reply(msg)));
                                 if let Some(ms) = new_timeout {
@@ -131,7 +131,7 @@ impl<A: GenServer> Builder<A> {
                         }
                     },
                     Ok(Message::Cast(msg)) => {
-                        match self.spec.handle_cast(msg, &itx, &mut state) {
+                        match self.spec.handle_cast(msg, &otx, &mut state) {
                             HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
@@ -142,7 +142,7 @@ impl<A: GenServer> Builder<A> {
                         }
                     },
                     Ok(Message::Info(msg)) => {
-                        match self.spec.handle_info(msg, &itx, &mut state) {
+                        match self.spec.handle_info(msg, &otx, &mut state) {
                             HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
