@@ -22,7 +22,7 @@ impl GenServer for MyActor {
     type S = ();
     type E = MyError;
 
-    fn init(&self, _tx: &actor::Sender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
+    fn init(&self, _tx: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
       // initialization implementation
       Ok(None)
     }
@@ -104,7 +104,7 @@ impl GenServer for MyActor {
     type S = MyState;
     type E = MyError;
 
-    fn init(&self, atx: &actor::Sender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
+    fn init(&self, atx: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
         // perform some initialization
         Ok(None)
     }
@@ -132,8 +132,8 @@ impl GenServer for MyActor {
 
     // ... other callbacks ...
 
-    fn handle_call(&self, msg: Self::T, tx: &actor::Sender<Self::T>,
-        atx: &actor::Sender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_call(&self, msg: Self::T, tx: &ActorSender<Self::T>,
+        atx: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
         match msg {
             MyMessage::GetState => HandleResult::Reply(MyMessage::State(state.initialized), None),
             MyMessage::SetState(value) => {
@@ -168,7 +168,7 @@ impl GenServer for MyActor {
 
     // ... other callbacks ...
 
-    fn handle_cast(&self, msg: Self::T, atx: &actor::Sender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_cast(&self, msg: Self::T, atx: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
         match msg {
             MyMessage::SetState(value) => {
                 state.initialized = value;
@@ -201,11 +201,11 @@ impl GenServer for MyActor {
     type S = MyState;
     type E = MyError;
 
-    fn init(&self, atx: &actor::Sender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
+    fn init(&self, atx: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
         Ok(Some(0))
     }
 
-    fn handle_timeout(&self, atx: &actor::Sender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_timeout(&self, atx: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
         // long running function for late initialization
         HandleResult::NoReply(None)
     }
