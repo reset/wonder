@@ -141,17 +141,6 @@ impl<A: GenServer> Builder<A> {
                             hr => panic!("unexpected `HandleResult` returned from handle_cast: {:?}", hr),
                         }
                     },
-                    Ok(Message::Info(msg)) => {
-                        match self.spec.handle_info(msg, &otx, &mut state) {
-                            HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
-                            HandleResult::NoReply(new_timeout) => {
-                                if let Some(ms) = new_timeout {
-                                    set_timeout(ms, &mut timeout);
-                                }
-                            },
-                            hr => panic!("unexpected `HandleResult` returned from handle_info: {:?}", hr),
-                        }
-                    },
                     Ok(hr) => panic!("received unexpected message type: {:?}", hr),
                     Err(TryRecvError::Disconnected) => { break; },
                     Err(TryRecvError::Empty) => { },
@@ -199,7 +188,6 @@ pub enum HandleResult<T> where T: Any + Send {
 pub enum Message<T> where T: Any + Send {
     Call(T),
     Cast(T),
-    Info(T),
     Reply(T),
 }
 
@@ -208,7 +196,6 @@ impl<T> Debug for Message<T> where T: Any + Send + Debug {
         match self {
             &Message::Call(ref msg) => write!(f, "CALL: {:?}", msg),
             &Message::Cast(ref msg) => write!(f, "CAST: {:?}", msg),
-            &Message::Info(ref msg) => write!(f, "INFO: {:?}", msg),
             &Message::Reply(ref msg) => write!(f, "REPLY: {:?}", msg)
         }
     }
@@ -226,9 +213,6 @@ pub trait GenServer : Send + 'static {
     }
     fn handle_cast(&self, _message: Self::T, _tx: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
         panic!("handle_cast callback not implemented");
-    }
-    fn handle_info(&self, _message: Self::T, _tx: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
-        HandleResult::NoReply(None)
     }
     fn handle_timeout(&self, _tx: &Sender<Message<Self::T>>, _state: &mut Self::S) -> HandleResult<Self::T> {
         HandleResult::NoReply(None)
