@@ -32,23 +32,23 @@ impl<T> Actor<T> where T: Any + Send {
         }
     }
 
-    pub fn cast(&self, message: T) -> Result<(), ActorError> {
+    pub fn cast(&self, message: T) -> ActorResult<()> {
         self::cast(&self.sender, message)
     }
 
-    pub fn call(&self, message: T) -> Result<T, ActorError> {
+    pub fn call(&self, message: T) -> ActorResult<T> {
         self::call(&self.sender, &self.receiver, message)
     }
 }
 
-pub fn cast<T: Any + Send>(tx: &Sender<Message<T>>, message: T) -> Result<(), ActorError> {
+pub fn cast<T: Any + Send>(tx: &Sender<Message<T>>, message: T) -> ActorResult<()> {
     match tx.send(Message::Cast(message)) {
         Ok(()) => Ok(()),
         Err(err) => Err(ActorError::from(err)),
     }
 }
 
-pub fn call<T: Any + Send>(tx: &Sender<Message<T>>, rx: &Receiver<Message<T>>, message: T) -> Result<T, ActorError> {
+pub fn call<T: Any + Send>(tx: &Sender<Message<T>>, rx: &Receiver<Message<T>>, message: T) -> ActorResult<T> {
     match tx.send(Message::Call(message)) {
         Ok(()) => {
             match rx.recv() {
