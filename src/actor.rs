@@ -98,7 +98,7 @@ impl<A: GenServer> Builder<A> {
             loop {
                 if let Some(go_time) = timeout {
                     if go_time >= SteadyTime::now() {
-                        match self.spec.handle_timeout(&otx, &mut state) {
+                        match self.spec.handle_timeout(&itx, &mut state) {
                             HandleResult::Stop(reason, None) => return shutdown(reason, None, &otx),
                             HandleResult::NoReply(Some(0)) => {
                                 set_timeout(0, &mut timeout);
@@ -131,7 +131,7 @@ impl<A: GenServer> Builder<A> {
                         }
                     },
                     Ok(Message::Cast(msg)) => {
-                        match self.spec.handle_cast(msg, &otx, &mut state) {
+                        match self.spec.handle_cast(msg, &itx, &mut state) {
                             HandleResult::Stop(reason, reply) => return shutdown(reason, reply, &otx),
                             HandleResult::NoReply(new_timeout) => {
                                 if let Some(ms) = new_timeout {
