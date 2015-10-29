@@ -98,6 +98,7 @@ Handles initialization of the newly created actor. As with proccess initializati
 
 The init function must returns an `InitResult` which is either `Ok(Option<u64>)` or `Err(E)` where E is your custom error type. The optional `u64` is the timeout value (in milliseconds) for the actor.
 
+```rust
 impl GenServer for MyActor {
     type T = MyMessage;
     type S = MyState;
@@ -108,6 +109,7 @@ impl GenServer for MyActor {
         Ok(None)
     }
 }
+```
 
 Parameters
 
@@ -176,6 +178,7 @@ impl GenServer for MyActor {
         }
     }
 }
+```
 
 Parameters
 
