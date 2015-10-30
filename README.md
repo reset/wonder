@@ -104,7 +104,7 @@ impl GenServer for MyActor {
     type S = MyState;
     type E = MyError;
 
-    fn init(&self, atx: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
+    fn init(&self, me: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
         // perform some initialization
         Ok(None)
     }
@@ -113,7 +113,7 @@ impl GenServer for MyActor {
 
 Parameters
 
-- `atx` - Channel sender for the running actor. This is equivalent to sending to "self" in Elixir/Erlang.
+- `me` - Channel sender for the running actor. This is equivalent to sending to "self" in Elixir/Erlang.
 - `state` - A mutable reference to the state that the running actor owns.
 
 > note: `InitResult` is analogous to the return tuple for the `init/1` callback in Elixir; ie. `{:ok, state}` or `{:stop, reason}`
@@ -133,7 +133,7 @@ impl GenServer for MyActor {
     // ... other callbacks ...
 
     fn handle_call(&self, msg: Self::T, tx: &ActorSender<Self::T>,
-        atx: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
+        me: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
         match msg {
             MyMessage::GetState => HandleResult::Reply(MyMessage::State(state.initialized), None),
             MyMessage::SetState(value) => {
@@ -149,12 +149,12 @@ impl GenServer for MyActor {
 Parameters
 
 - `tx` - Channel sender for the caller who started the actor. This is equivalent to sending to the caller's PID in Elixir/Erlang.
-- `atx` - Same as `init/3`.
+- `me` - Same as `init/3`.
 - `state` - Same as `init/3`.
 
 > note: `HandleResult` is analogous to the return tuple for the `handle_call/3` callback in Elixir/Erlang.
 
-### `handle_cast/4 -> HandleResult<T>` (optional)
+### `handle_cast/5 -> HandleResult<T>` (optional)
 
 > analogous to [GenServer:handle_cast/2](http://elixir-lang.org/docs/stable/elixir/GenServer.html#c:handle_cast/2)
 
@@ -168,7 +168,7 @@ impl GenServer for MyActor {
 
     // ... other callbacks ...
 
-    fn handle_cast(&self, msg: Self::T, atx: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_cast(&self, msg: Self::T, tx: &ActorSender<Self::T>, me: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
         match msg {
             MyMessage::SetState(value) => {
                 state.initialized = value;
@@ -182,12 +182,13 @@ impl GenServer for MyActor {
 
 Parameters
 
-- `atx` - Same as `init/3`
+- `tx` - Same as `handle_call/5`
+- `me` - Same as `init/3`
 - `state` - Same as `init/3`
 
 > note: `HandleResult` is analogous to the return tuple for the `handle_cast/2` callback in Elixir/Erlang.
 
-### `handle_timeout/3 -> HandleResult<T>` (optional)
+### `handle_timeout/4 -> HandleResult<T>` (optional)
 
 > analogous to matching `handle_info(:timeout, _state)` in Elixir
 
@@ -201,11 +202,11 @@ impl GenServer for MyActor {
     type S = MyState;
     type E = MyError;
 
-    fn init(&self, atx: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
+    fn init(&self, me: &ActorSender<Self::T>, state: &mut Self::S) -> InitResult<Self::E> {
         Ok(Some(0))
     }
 
-    fn handle_timeout(&self, atx: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
+    fn handle_timeout(&self, tx: &ActorSender<Self::T>, me: &ActorSender<Self::T>, state: &mut Self::S) -> HandleResult<Self::T> {
         // long running function for late initialization
         HandleResult::NoReply(None)
     }
@@ -214,7 +215,8 @@ impl GenServer for MyActor {
 
 Parameters
 
-- `atx` - Same as `init/3`
+- `tx` - Same as `handle_call/5`
+- `me` - Same as `init/3`
 - `state` - Same as `init/3`
 
 > note: `HandleResult` is analogous to the return tuple for the `handle_info/2` callback in Elixir/Erlang.
