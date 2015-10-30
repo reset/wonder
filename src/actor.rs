@@ -146,6 +146,14 @@ impl<A: GenServer> Builder<A> {
                     Err(mpsc::TryRecvError::Disconnected) => { break; },
                     Err(mpsc::TryRecvError::Empty) => { },
                 }
+                // This is absolutely the wrong solution. I need to park the thread or call
+                // recv instead of try_recv and schedule the timeout mechanism another way.
+                // This is a quick and dirty workaround that should be short lived while the API
+                // stabilizes and is leveraged in our other applications.
+                //
+                // I'm so sorry for doing this.
+                //      - Jamie
+                thread::sleep_ms(30)
             }
             Ok(())
         }).unwrap();
