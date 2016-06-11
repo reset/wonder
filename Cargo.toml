@@ -1,7 +1,11 @@
 [package]
-name = "wonder"
-version = "0.1.0"
-authors = ["Jamie Winsor <jamie@vialstudios.com>"]
+name         = "wonder"
+version      = "0.1.0"
+authors      = ["Jamie Winsor <jamie@vialstudios.com>"]
+description  = "An Erlang/Elixir inspired actor library for Rust"
+repository   = "https://github.com/reset/wonder"
+readme       = "README.md"
+license      = "MIT"
 
 [dependencies]
 time = "0.1"
