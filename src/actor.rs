@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::result;
 use std::sync::mpsc;
 use std::thread;
+use std::time;
 
 use time::{Duration, SteadyTime};
 
@@ -178,7 +179,7 @@ impl<A: GenServer> Builder<A> {
                     //
                     // I'm so sorry for doing this.
                     //      - Jamie
-                    thread::sleep_ms(30)
+                    thread::sleep(time::Duration::from_millis(30));
                 }
                 Ok(())
             })
